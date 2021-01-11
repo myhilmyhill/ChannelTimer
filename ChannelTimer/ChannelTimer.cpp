@@ -60,7 +60,7 @@ struct Timer
 
 	SleepCondition condition;			// スリープする条件
 	SYSTEMTIME dateToChange;
-	DWORD durationToChange;				// スリープまでの時間(秒単位)
+	DWORD durationToChange = 0;			// スリープまでの時間(秒単位)
 	WORD eventID;						// 現在の番組の event_id
 	TVTest::ChannelSelectInfo channelInfo = {};
 	Timer() noexcept {
