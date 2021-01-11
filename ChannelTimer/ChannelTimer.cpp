@@ -297,9 +297,13 @@ bool CChannelTimer::BeginTimer()
 	const Timer::SleepCondition& condition = this->m_timer.condition;
 
 	if (condition == Timer::SleepCondition::CONDITION_DURATION) {
+		if (this->m_timer.durationToChange < this->m_ConfirmTimeout) {
+			m_pApp->AddLog(TEXT("タイマーを開始できません。確認時間より長い指定時間が設定されませんでした。"));
+			return false;
+		}
 		::wsprintfW(szLog, L"%lu 秒後にスリープします。", (unsigned long)this->m_timer.durationToChange);
 		m_pApp->AddLog(szLog);
-		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, this->m_timer.durationToChange * 1000, nullptr);
+		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, (this->m_timer.durationToChange - this->m_ConfirmTimeout) * 1000, nullptr);
 	}
 	else if (condition == Timer::SleepCondition::CONDITION_DATETIME || condition == Timer::SleepCondition::CONDITION_EVENTEND) {
 		if (condition == Timer::SleepCondition::CONDITION_DATETIME) {
@@ -403,7 +407,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 					SYSTEMTIME st;
 
 					::GetSystemTime(&st);
-					if (DiffSystemTime(st, timer.dateToChange) >= 0) {
+					if (DiffSystemTime(st, timer.dateToChange) < pThis->m_ConfirmTimeout * 1000LL) {
 						// 指定時刻が来たのでスリープ開始
 						pThis->BeginSleep();
 					}
@@ -429,6 +433,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 								li.HighPart = ft.dwHighDateTime;
 								li.QuadPart -= 9LL * FILETIME_HOUR;				// EPG日時(UTC+9) -> UTC
 								li.QuadPart += Info.Duration * FILETIME_SEC;	// 終了時刻
+								li.QuadPart -= pThis->m_ConfirmTimeout;			// 確認時間
 								ft.dwLowDateTime = li.LowPart;
 								ft.dwHighDateTime = li.HighPart;
 								FILETIME CurrentTime;
@@ -595,6 +600,10 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				if (Condition == Timer::SleepCondition::CONDITION_DURATION) {
 					if (Duration * 1000 > USER_TIMER_MAXIMUM) {
 						::MessageBox(hDlg, TEXT("スリープまでの時間が長すぎます。"), nullptr, MB_OK | MB_ICONEXCLAMATION);
+						return TRUE;
+					}
+					if (Duration < pThis->m_ConfirmTimeout) {
+						::MessageBox(hDlg, TEXT("確認時間より長い指定時間を設定してください。"), nullptr, MB_OK | MB_ICONEXCLAMATION);
 						return TRUE;
 					}
 					if (Duration == 0) {
