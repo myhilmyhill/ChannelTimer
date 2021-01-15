@@ -52,7 +52,7 @@ static LONGLONG DiffSystemTime(const SYSTEMTIME &st1, const SYSTEMTIME &st2)
 struct Timer
 {
 	// スリープ条件
-	enum SleepCondition {
+	enum class SleepCondition {
 		CONDITION_DURATION,	// 時間経過
 		CONDITION_DATETIME,	// 指定時刻
 		CONDITION_EVENTEND	// 番組終了
@@ -107,7 +107,7 @@ class CChannelTimer : public TVTest::CTVTestPlugin
 	static const int DEFAULT_POS = INT_MIN;
 
 	bool m_fInitialized = false;				// 初期化済みか?
-	TCHAR m_szIniFileName[MAX_PATH];	// INIファイルのパス
+	TCHAR m_szIniFileName[MAX_PATH] = TEXT("");	// INIファイルのパス
 	Timer m_timer;
 	bool m_fIgnoreRecStatus = true;			// 録画中でもスリープする
 	int m_ConfirmTimeout = 10;				// 確認のタイムアウト時間(秒単位)
@@ -116,7 +116,8 @@ class CChannelTimer : public TVTest::CTVTestPlugin
 	POINT m_SettingsDialogPos;			// 設定ダイアログの位置
 	HWND m_hwnd = nullptr;						// ウィンドウハンドル
 	bool m_fEnabled = false;					// プラグインが有効か?
-	int m_ConfirmTimerCount;			// 確認のタイマー
+	int m_ConfirmTimerCount = 0;			// 確認のタイマー
+	std::vector<std::wstring> m_drivers;
 	std::vector<std::wstring> m_tuningSpaces;
 	std::vector<CServiceInfo> m_channels;
 
@@ -297,13 +298,12 @@ bool CChannelTimer::BeginTimer()
 	const Timer::SleepCondition& condition = this->m_timer.condition;
 
 	if (condition == Timer::SleepCondition::CONDITION_DURATION) {
-		if (this->m_timer.durationToChange < this->m_ConfirmTimeout) {
-			m_pApp->AddLog(TEXT("タイマーを開始できません。確認時間より長い指定時間が設定されませんでした。"));
-			return false;
-		}
+		const UINT timer = this->m_timer.durationToChange > this->m_ConfirmTimeout
+			? (this->m_timer.durationToChange - this->m_ConfirmTimeout) * 1000
+			: 0;
 		::wsprintfW(szLog, L"%lu 秒後にスリープします。", (unsigned long)this->m_timer.durationToChange);
 		m_pApp->AddLog(szLog);
-		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, (this->m_timer.durationToChange - this->m_ConfirmTimeout) * 1000, nullptr);
+		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, timer, nullptr);
 	}
 	else if (condition == Timer::SleepCondition::CONDITION_DATETIME || condition == Timer::SleepCondition::CONDITION_EVENTEND) {
 		if (condition == Timer::SleepCondition::CONDITION_DATETIME) {
@@ -507,9 +507,23 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 
 			// サービスのリストを取得する
 			std::vector<CServiceInfo> services;
+			TVTest::CTVTestApp* pApp = pThis->m_pApp;
+
+			// チューナー
+			TCHAR driverName[MAX_PATH];
+			HWND hwndDevices = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
+			for (int i = 0; pApp->EnumDriver(i, driverName, _countof(driverName)); i++) {
+				pThis->m_drivers.push_back(driverName);
+				ComboBox_AddString(hwndDevices, driverName);
+
+				TCHAR curDriverName[MAX_PATH] = TEXT("");
+				pApp->GetDriverName(curDriverName, _countof(curDriverName));
+				if (_tcscmp(curDriverName, driverName) == 0) {
+					ComboBox_SetCurSel(hwndDevices, i);
+				}
+			}
 
 			// チューニング空間
-			TVTest::CTVTestApp *pApp = pThis->m_pApp;
 			int NumSpaces = 0;
 			const int curTuningSpace = pApp->GetTuningSpace(&NumSpaces);
 
@@ -536,7 +550,7 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				// 現在のチューニング空間のチャンネルを取得する
 				TVTest::ChannelInfo ChInfo;
 				for (int Channel = 0; pApp->GetChannelInfo(curTuningSpace, Channel, &ChInfo); Channel++) {
-					if (ChInfo.Flags & TVTest::CHANNEL_FLAG_DISABLED > 0)
+					if (ChInfo.Flags & TVTest::CHANNEL_FLAG_DISABLED)
 						continue;
 
 					const CServiceInfo pServiceInfo = CServiceInfo(ChInfo);
@@ -573,6 +587,75 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				EnableDlgItem(
 					hDlg, IDC_SETTINGS_DATETIME,
 					::IsDlgButtonChecked(hDlg, IDC_SETTINGS_CONDITION_DATETIME) == BST_CHECKED);
+			}
+			return TRUE;
+
+		case IDC_SETTINGS_DRIVERS:
+			if (HIWORD(wParam) == CBN_SELCHANGE) {
+				CChannelTimer* pThis = static_cast<CChannelTimer*>(pClientData);
+				TVTest::CTVTestApp* pApp = pThis->m_pApp;
+				HWND hwndDevices = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
+				if (ComboBox_GetCurSel(hwndDevices) < 0) {
+					return TRUE;
+				}
+				const TCHAR *cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)].c_str();
+
+				// チューニング空間
+				TVTest::DriverTuningSpaceList tuningList;
+				pApp->GetDriverTuningSpaceList(cur, &tuningList);
+
+				HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
+				pThis->m_tuningSpaces.clear();
+				ComboBox_ResetContent(hwndTuningSpaces);
+				for (int i = 0; i < tuningList.NumSpaces; i++) {
+					const TCHAR *name = tuningList.SpaceList[i]->pInfo->szName;
+					pThis->m_tuningSpaces.push_back(name);
+					ComboBox_AddString(hwndTuningSpaces, name);
+				}
+				pApp->FreeDriverTuningSpaceList(&tuningList);
+
+				// チャンネルをリセット
+				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
+				pThis->m_channels.clear();
+				ComboBox_ResetContent(hwndChannels);
+			}
+			return TRUE;
+
+		case IDC_SETTINGS_TUNING_SPACE:
+			if (HIWORD(wParam) == CBN_SELCHANGE) {
+				CChannelTimer* pThis = static_cast<CChannelTimer*>(pClientData);
+				TVTest::CTVTestApp* pApp = pThis->m_pApp;
+
+				HWND hwndDevices = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
+				if (ComboBox_GetCurSel(hwndDevices) < 0) {
+					return TRUE;
+				}
+				const TCHAR* cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)].c_str();
+				TVTest::DriverTuningSpaceList tuningList;
+				pApp->GetDriverTuningSpaceList(cur, &tuningList);
+
+				// チャンネル
+				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
+				pThis->m_channels.clear();
+				ComboBox_ResetContent(hwndChannels);
+				if (tuningList.NumSpaces >= 0) {
+					HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
+					const auto &spaceList = *tuningList.SpaceList[ComboBox_GetCurSel(hwndTuningSpaces)];
+
+					for (int Channel = 0; Channel < spaceList.NumChannels; Channel++) {
+						const TVTest::ChannelInfo& ChInfo = *spaceList.ChannelList[Channel];
+						if (ChInfo.Flags & TVTest::CHANNEL_FLAG_DISABLED)
+							continue;
+
+						const CServiceInfo pServiceInfo = CServiceInfo(ChInfo);
+
+						TCHAR name[MAX_PATH];
+						pThis->m_channels.push_back(pServiceInfo);
+						pServiceInfo.toTchar(name, _countof(name));
+						ComboBox_AddString(hwndChannels, name);
+					}
+				}
+				pApp->FreeDriverTuningSpaceList(&tuningList);
 			}
 			return TRUE;
 
@@ -633,6 +716,12 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				timer->condition = Condition;
 				timer->durationToChange = (DWORD)Duration;
 				timer->dateToChange = DateTime;
+
+				HWND hwndDriver = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
+				if (ComboBox_GetCurSel(hwndDriver) < 0) {
+					::MessageBox(hDlg, TEXT("ng"), nullptr, MB_OK | MB_ICONEXCLAMATION);
+					return TRUE;
+				}
 
 				HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
 				if (ComboBox_GetCurSel(hwndTuningSpaces) < 0) {
