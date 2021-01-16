@@ -6,14 +6,14 @@
 #define TVTEST_PLUGIN_CLASS_IMPLEMENT
 #include "TVTestPlugin.h"
 #include "resource.h"
-#include <vector>
-#include <string>
 #include <windowsx.h>
+#include "Model.h"
 
 #pragma comment(lib,"comctl32.lib")
 #pragma comment(lib,"shlwapi.lib")
 #pragma comment(lib,"powrprof.lib")
 
+using CServiceInfo = ChannelTimer::CServiceInfo;
 
 // FILETIME の単位
 static const LONGLONG FILETIME_MS   = 10000LL;
@@ -68,26 +68,6 @@ struct Timer
 		channelInfo.Flags = 0;
 		channelInfo.Channel = -1;
 		channelInfo.Space = -1;
-	}
-};
-
-struct CServiceInfo {
-	TCHAR szServiceName[64];
-	WORD NetworkID;
-	WORD ServiceID;
-	int channel;
-	CServiceInfo(const TVTest::ChannelInfo& ChInfo)
-		: NetworkID(ChInfo.NetworkID)
-		, ServiceID(ChInfo.ServiceID)
-		, channel(ChInfo.Channel)
-	{
-		::lstrcpy(szServiceName, ChInfo.szChannelName);
-	}
-	bool operator==(const CServiceInfo& rhs) const {
-		return this->ServiceID == rhs.ServiceID && this->NetworkID == rhs.NetworkID;
-	}
-	void toTchar(TCHAR* destination, size_t size) const {
-		_stprintf_s(destination, size, _T("%d %d %s"), ServiceID, NetworkID, szServiceName);
 	}
 };
 
@@ -505,72 +485,41 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 			::GetLocalTime(&st);
 			DateTime_SetSystemtime(hwndDateTime, GDT_VALID, &st);
 
-			// サービスのリストを取得する
-			std::vector<CServiceInfo> services;
 			TVTest::CTVTestApp* pApp = pThis->m_pApp;
 
 			// チューナー
-			TCHAR driverName[MAX_PATH];
-			HWND hwndDevices = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
-			for (int i = 0; pApp->EnumDriver(i, driverName, _countof(driverName)); i++) {
-				pThis->m_drivers.push_back(driverName);
-				ComboBox_AddString(hwndDevices, driverName);
+			WCHAR curDriverName[MAX_PATH] = L"";
+			pApp->GetDriverName(curDriverName, _countof(curDriverName));
 
-				TCHAR curDriverName[MAX_PATH] = TEXT("");
-				pApp->GetDriverName(curDriverName, _countof(curDriverName));
-				if (_tcscmp(curDriverName, driverName) == 0) {
-					ComboBox_SetCurSel(hwndDevices, i);
-				}
-			}
+			HWND hwndDevices = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
+			pThis->m_drivers = ChannelTimer::GetDrivers(pApp, [&](const std::wstring &nameString, int _) {
+				const WCHAR* driverName = nameString.c_str();
+				ComboBox_AddString(hwndDevices, driverName);
+			});
+			ComboBox_SelectItemData(hwndDevices, -1, curDriverName);
 
 			// チューニング空間
-			int NumSpaces = 0;
-			const int curTuningSpace = pApp->GetTuningSpace(&NumSpaces);
-
 			HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
-			pThis->m_tuningSpaces.clear();
-			for (int i = 0; i < NumSpaces; i++) {
-				TCHAR name[MAX_PATH];
-				pApp->GetTuningSpaceName(i, name, _countof(name));
-				pThis->m_tuningSpaces.push_back(name);
+			pThis->m_tuningSpaces = ChannelTimer::GetTuningSpaces(pApp, [&](const std::wstring &nameString, int _) {
+				const WCHAR* name = nameString.c_str();
 				ComboBox_AddString(hwndTuningSpaces, name);
-			}
+			});
+			// 現在開いているチューニング空間を選ぶ
+			const int curTuningSpace = pApp->GetTuningSpace();
 			ComboBox_SetCurSel(hwndTuningSpaces, curTuningSpace);
 
 			// チャンネル
-			HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
-			pThis->m_channels.clear();
 			if (curTuningSpace >= 0) {
+				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
+				pThis->m_channels = ChannelTimer::GetChannels(pApp, curTuningSpace, [&](const CServiceInfo &chInfo, int _) {
+					ComboBox_AddString(hwndChannels, chInfo.toString().c_str());
+				});
+
+				// 現在開いているチャンネルを選ぶ
 				TVTest::ChannelInfo curChInfo;
 				pApp->GetCurrentChannelInfo(&curChInfo);
 				const CServiceInfo pCurServiceInfo = CServiceInfo(curChInfo);
-				TCHAR curName[MAX_PATH];
-				pCurServiceInfo.toTchar(curName, _countof(curName));
-
-				// 現在のチューニング空間のチャンネルを取得する
-				TVTest::ChannelInfo ChInfo;
-				for (int Channel = 0; pApp->GetChannelInfo(curTuningSpace, Channel, &ChInfo); Channel++) {
-					if (ChInfo.Flags & TVTest::CHANNEL_FLAG_DISABLED)
-						continue;
-
-					const CServiceInfo pServiceInfo = CServiceInfo(ChInfo);
-
-					TCHAR name[MAX_PATH];
-					pThis->m_channels.push_back(pServiceInfo);
-					pServiceInfo.toTchar(name, _countof(name));
-					ComboBox_AddString(hwndChannels, name);
-				}
-				ComboBox_SelectItemData(hwndChannels, -1, curName);
-			}
-			else {
-				// 全てのチューニング空間のチャンネルを取得する
-				TVTest::ChannelInfo ChInfo;
-				for (int Space = 0; Space < NumSpaces; Space++) {
-					for (int Channel = 0; pApp->GetChannelInfo(Space, Channel, &ChInfo); Channel++) {
-						const CServiceInfo pServiceInfo = CServiceInfo(ChInfo);
-						ComboBox_AddString(hwndChannels, pServiceInfo.szServiceName);
-					}
-				}
+				ComboBox_SelectItemData(hwndChannels, -1, pCurServiceInfo.toString().c_str());
 			}
 		}
 		return TRUE;
@@ -598,21 +547,17 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				if (ComboBox_GetCurSel(hwndDevices) < 0) {
 					return TRUE;
 				}
-				const TCHAR *cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)].c_str();
+				const std::wstring &cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)];
 
 				// チューニング空間
 				TVTest::DriverTuningSpaceList tuningList;
-				pApp->GetDriverTuningSpaceList(cur, &tuningList);
+				pApp->GetDriverTuningSpaceList(cur.c_str(), &tuningList);
 
 				HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
-				pThis->m_tuningSpaces.clear();
 				ComboBox_ResetContent(hwndTuningSpaces);
-				for (int i = 0; i < tuningList.NumSpaces; i++) {
-					const TCHAR *name = tuningList.SpaceList[i]->pInfo->szName;
-					pThis->m_tuningSpaces.push_back(name);
-					ComboBox_AddString(hwndTuningSpaces, name);
-				}
-				pApp->FreeDriverTuningSpaceList(&tuningList);
+				pThis->m_tuningSpaces = ChannelTimer::GetTuningSpaces(pApp, cur, [&](std::wstring name, int _) {
+					ComboBox_AddString(hwndTuningSpaces, name.c_str());
+				});
 
 				// チャンネルをリセット
 				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
@@ -630,32 +575,16 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				if (ComboBox_GetCurSel(hwndDevices) < 0) {
 					return TRUE;
 				}
-				const TCHAR* cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)].c_str();
-				TVTest::DriverTuningSpaceList tuningList;
-				pApp->GetDriverTuningSpaceList(cur, &tuningList);
+				const std::wstring &cur = pThis->m_drivers[ComboBox_GetCurSel(hwndDevices)];
 
 				// チャンネル
 				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
-				pThis->m_channels.clear();
 				ComboBox_ResetContent(hwndChannels);
-				if (tuningList.NumSpaces >= 0) {
-					HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
-					const auto &spaceList = *tuningList.SpaceList[ComboBox_GetCurSel(hwndTuningSpaces)];
-
-					for (int Channel = 0; Channel < spaceList.NumChannels; Channel++) {
-						const TVTest::ChannelInfo& ChInfo = *spaceList.ChannelList[Channel];
-						if (ChInfo.Flags & TVTest::CHANNEL_FLAG_DISABLED)
-							continue;
-
-						const CServiceInfo pServiceInfo = CServiceInfo(ChInfo);
-
-						TCHAR name[MAX_PATH];
-						pThis->m_channels.push_back(pServiceInfo);
-						pServiceInfo.toTchar(name, _countof(name));
-						ComboBox_AddString(hwndChannels, name);
-					}
-				}
-				pApp->FreeDriverTuningSpaceList(&tuningList);
+				HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
+				pThis->m_channels = ChannelTimer::GetChannels(pApp, cur.c_str(), ComboBox_GetCurSel(hwndTuningSpaces),
+					[&](const CServiceInfo &chInfo, int index) {
+						ComboBox_AddString(hwndChannels, chInfo.toString().c_str());
+					});
 			}
 			return TRUE;
 
@@ -717,25 +646,26 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				timer->durationToChange = (DWORD)Duration;
 				timer->dateToChange = DateTime;
 
-				HWND hwndDriver = ::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS);
-				if (ComboBox_GetCurSel(hwndDriver) < 0) {
+				int driverIndex = ComboBox_GetCurSel(::GetDlgItem(hDlg, IDC_SETTINGS_DRIVERS));
+				if (driverIndex < 0) {
 					::MessageBox(hDlg, TEXT("ng"), nullptr, MB_OK | MB_ICONEXCLAMATION);
 					return TRUE;
 				}
+				timer->channelInfo.pszTuner = pThis->m_drivers.at(driverIndex).c_str();
 
-				HWND hwndTuningSpaces = ::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE);
-				if (ComboBox_GetCurSel(hwndTuningSpaces) < 0) {
+				int spaceIndex = ComboBox_GetCurSel(::GetDlgItem(hDlg, IDC_SETTINGS_TUNING_SPACE));
+				if (spaceIndex < 0) {
 					::MessageBox(hDlg, TEXT("ng"), nullptr, MB_OK | MB_ICONEXCLAMATION);
 					return TRUE;
 				}
-				timer->channelInfo.Space = ComboBox_GetCurSel(hwndTuningSpaces);
+				timer->channelInfo.Space = spaceIndex;
 
-				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
-				if (ComboBox_GetCurSel(hwndChannels) < 0) {
+				int channelIndex = ComboBox_GetCurSel(::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS));
+				if (channelIndex < 0) {
 					::MessageBox(hDlg, TEXT("ng"), nullptr, MB_OK | MB_ICONEXCLAMATION);
 					return TRUE;
 				}
-				const auto& ch = pThis->m_channels.at(ComboBox_GetCurSel(hwndChannels));
+				const auto& ch = pThis->m_channels.at(channelIndex);
 				timer->channelInfo.NetworkID = ch.NetworkID;
 				timer->channelInfo.ServiceID = ch.ServiceID;
 
@@ -743,6 +673,7 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				if (pThis->m_fEnabled)
 					pThis->BeginTimer();
 			}
+			[[fallthrough]];
 		case IDCANCEL:
 			{
 				CChannelTimer *pThis = static_cast<CChannelTimer*>(pClientData);

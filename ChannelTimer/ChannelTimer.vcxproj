@@ -153,6 +153,7 @@
       <CompileAs>Default</CompileAs>
       <AdditionalOptions>/source-charset:utf-8 %(AdditionalOptions)</AdditionalOptions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
       <OutputFile>$(OutDir)$(ProjectName)$(TargetExt)</OutputFile>
@@ -311,8 +312,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ChannelTimer.cpp" />
+    <ClCompile Include="Model.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Model.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="TVTestPlugin.h" />
   </ItemGroup>
