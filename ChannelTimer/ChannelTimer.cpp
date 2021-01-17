@@ -387,7 +387,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 					SYSTEMTIME st;
 
 					::GetSystemTime(&st);
-					if (DiffSystemTime(st, timer.dateToChange) < pThis->m_ConfirmTimeout * 1000LL) {
+					if (DiffSystemTime(st, timer.dateToChange) > -pThis->m_ConfirmTimeout * 1000LL) {
 						// 指定時刻が来たのでスリープ開始
 						pThis->BeginSleep();
 					}
@@ -558,6 +558,9 @@ INT_PTR CALLBACK CChannelTimer::SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wPa
 				pThis->m_tuningSpaces = ChannelTimer::GetTuningSpaces(pApp, cur, [&](std::wstring name, int _) {
 					ComboBox_AddString(hwndTuningSpaces, name.c_str());
 				});
+				if (pThis->m_tuningSpaces.size() == 1) {
+					ComboBox_SetCurSel(hwndTuningSpaces, 1);
+				}
 
 				// チャンネルをリセット
 				HWND hwndChannels = ::GetDlgItem(hDlg, IDC_SETTINGS_CHANNELS);
