@@ -97,6 +97,7 @@ class CChannelTimer : public TVTest::CTVTestPlugin
 	HWND m_hwnd = nullptr;						// ウィンドウハンドル
 	bool m_fEnabled = false;					// プラグインが有効か?
 	int m_ConfirmTimerCount = 0;			// 確認のタイマー
+	int m_offset = -5;						// チャンネル切り替え時差(秒)
 	std::vector<std::wstring> m_drivers;
 	std::vector<std::wstring> m_tuningSpaces;
 	std::vector<CServiceInfo> m_channels;
@@ -278,12 +279,10 @@ bool CChannelTimer::BeginTimer()
 	const Timer::SleepCondition& condition = this->m_timer.condition;
 
 	if (condition == Timer::SleepCondition::CONDITION_DURATION) {
-		const UINT timer = this->m_timer.durationToChange > this->m_ConfirmTimeout
-			? (this->m_timer.durationToChange - this->m_ConfirmTimeout) * 1000
-			: 0;
+		int timer = this->m_timer.durationToChange - this->m_ConfirmTimeout - this->m_offset;
 		::wsprintfW(szLog, L"%lu 秒後にスリープします。", (unsigned long)this->m_timer.durationToChange);
 		m_pApp->AddLog(szLog);
-		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, timer, nullptr);
+		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, timer > 0 ? timer : 0, nullptr);
 	}
 	else if (condition == Timer::SleepCondition::CONDITION_DATETIME || condition == Timer::SleepCondition::CONDITION_EVENTEND) {
 		if (condition == Timer::SleepCondition::CONDITION_DATETIME) {
@@ -387,7 +386,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 					SYSTEMTIME st;
 
 					::GetSystemTime(&st);
-					if (DiffSystemTime(st, timer.dateToChange) > -pThis->m_ConfirmTimeout * 1000LL) {
+					if (DiffSystemTime(st, timer.dateToChange) > -(0LL + pThis->m_ConfirmTimeout + pThis->m_offset) * 1000LL) {
 						// 指定時刻が来たのでスリープ開始
 						pThis->BeginSleep();
 					}
@@ -413,7 +412,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 								li.HighPart = ft.dwHighDateTime;
 								li.QuadPart -= 9LL * FILETIME_HOUR;				// EPG日時(UTC+9) -> UTC
 								li.QuadPart += Info.Duration * FILETIME_SEC;	// 終了時刻
-								li.QuadPart -= pThis->m_ConfirmTimeout;			// 確認時間
+								li.QuadPart -= 0LL + pThis->m_ConfirmTimeout + pThis->m_offset;			// 確認時間
 								ft.dwLowDateTime = li.LowPart;
 								ft.dwHighDateTime = li.HighPart;
 								FILETIME CurrentTime;
