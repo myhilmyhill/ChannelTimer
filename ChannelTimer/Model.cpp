@@ -29,9 +29,9 @@ namespace ChannelTimer {
 		/* const */ TVTest::CTVTestApp* pApp,
 		const std::function<void(const std::wstring& name, int index)> action)
 	{
-		std::vector<std::wstring> spaces;
 		int NumSpaces = 0;
 		const int _ = pApp->GetTuningSpace(&NumSpaces);
+		std::vector<std::wstring> spaces(NumSpaces);
 
 		for (int i = 0; i < NumSpaces; i++) {
 			WCHAR name[MAX_PATH];
@@ -49,9 +49,9 @@ namespace ChannelTimer {
 		const std::wstring driverNameString,
 		const std::function<void(const std::wstring& name, int index)> action)
 	{
-		std::vector<std::wstring> spaces;
 		TVTest::DriverTuningSpaceList tuningList;
 		pApp->GetDriverTuningSpaceList(driverNameString.c_str(), &tuningList);
+		std::vector<std::wstring> spaces(tuningList.NumSpaces);
 
 		for (int i = 0; i < tuningList.NumSpaces; i++) {
 			const WCHAR* name = tuningList.SpaceList[i]->pInfo->szName;
