@@ -97,7 +97,7 @@ class CChannelTimer : public TVTest::CTVTestPlugin
 	HWND m_hwnd = nullptr;						// ウィンドウハンドル
 	bool m_fEnabled = false;					// プラグインが有効か?
 	int m_ConfirmTimerCount = 0;			// 確認のタイマー
-	int m_offset = -5;						// チャンネル切り替え時差(秒)
+	int m_offset = 5;						// チャンネル切り替えを時差(秒)。+ で早める
 	std::vector<std::wstring> m_drivers;
 	std::vector<std::wstring> m_tuningSpaces;
 	std::vector<CServiceInfo> m_channels;
@@ -115,6 +115,10 @@ class CChannelTimer : public TVTest::CTVTestPlugin
 	static LRESULT CALLBACK WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 	static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
 	static INT_PTR CALLBACK ConfirmDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam, void *pClientData);
+
+	LONGLONG GetOffsetSecond() const;
+	bool IsUpInSecond(LONGLONG timeRemainingSecond) const;
+	bool IsUpInMillisecond(LONGLONG timeRemainingMillisecond) const;
 
 public:
 	CChannelTimer();
@@ -220,6 +224,18 @@ bool CChannelTimer::OnEnablePlugin(bool fEnable)
 	return true;
 }
 
+LONGLONG CChannelTimer::GetOffsetSecond() const {
+	return 0LL + m_ConfirmTimeout + m_offset;
+}
+
+bool CChannelTimer::IsUpInSecond(LONGLONG timeRemainingSecond) const {
+	return timeRemainingSecond < GetOffsetSecond();
+}
+
+bool CChannelTimer::IsUpInMillisecond(LONGLONG timeRemainingMillisecond) const {
+	return timeRemainingMillisecond < GetOffsetSecond() * 1000;
+}
+
 // スリープ開始
 bool CChannelTimer::BeginSleep()
 {
@@ -279,16 +295,30 @@ bool CChannelTimer::BeginTimer()
 	const Timer::SleepCondition& condition = this->m_timer.condition;
 
 	if (condition == Timer::SleepCondition::CONDITION_DURATION) {
-		int timer = this->m_timer.durationToChange - this->m_ConfirmTimeout - this->m_offset;
-		::wsprintfW(szLog, L"%lu 秒後にスリープします。", (unsigned long)this->m_timer.durationToChange);
-		m_pApp->AddLog(szLog);
+		int timer = (this->m_timer.durationToChange - GetOffsetSecond()) * 1000;
+		std::wstring log =
+			std::to_wstring(this->m_timer.durationToChange - m_offset) + std::wstring(L" 秒後にチャンネル切り替え、")
+			+ std::to_wstring(timer / 1000) + std::wstring(L" 秒後に確認画面を表示します。");
+		m_pApp->AddLog(log.c_str());
 		Result = ::SetTimer(m_hwnd, TIMER_ID_SLEEP, timer > 0 ? timer : 0, nullptr);
 	}
 	else if (condition == Timer::SleepCondition::CONDITION_DATETIME || condition == Timer::SleepCondition::CONDITION_EVENTEND) {
 		if (condition == Timer::SleepCondition::CONDITION_DATETIME) {
-			::wsprintfW(szLog, L"%d/%d/%d %02d:%02d:%02d (UTC) にスリープします。",
-				this->m_timer.dateToChange.wYear, this->m_timer.dateToChange.wMonth, this->m_timer.dateToChange.wDay,
-				this->m_timer.dateToChange.wHour, this->m_timer.dateToChange.wMinute, this->m_timer.dateToChange.wSecond);
+			// offset 分の時刻を差し引きます
+			FILETIME ftOffsetedUtc;
+			::SystemTimeToFileTime(&m_timer.dateToChange, &ftOffsetedUtc);
+			FILETIME ftOffsetedLocal;
+			::FileTimeToLocalFileTime(&ftOffsetedUtc, &ftOffsetedLocal);
+			ULARGE_INTEGER secs = {};
+			secs.QuadPart = m_offset * 10000000ULL;
+			ftOffsetedLocal.dwHighDateTime -= secs.HighPart;
+			ftOffsetedLocal.dwLowDateTime -= secs.LowPart;
+			SYSTEMTIME stOffseted;
+			::FileTimeToSystemTime(&ftOffsetedLocal, &stOffseted);
+
+			::wsprintfW(szLog, L"%d/%d/%d %02d:%02d:%02d にスリープします。",
+				stOffseted.wYear, stOffseted.wMonth, stOffseted.wDay,
+				stOffseted.wHour, stOffseted.wMinute, stOffseted.wSecond);
 			m_pApp->AddLog(szLog);
 		}
 		else {
@@ -386,7 +416,7 @@ LRESULT CALLBACK CChannelTimer::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPA
 					SYSTEMTIME st;
 
 					::GetSystemTime(&st);
-					if (DiffSystemTime(st, timer.dateToChange) > -(0LL + pThis->m_ConfirmTimeout + pThis->m_offset) * 1000LL) {
+					if (pThis->IsUpInMillisecond(DiffSystemTime(timer.dateToChange, st))) {
 						// 指定時刻が来たのでスリープ開始
 						pThis->BeginSleep();
 					}
